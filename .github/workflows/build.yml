@@ -1,0 +1,141 @@
+# Build Tern for one Chromium stable version as a chain of stages (each GitHub
+# job may run 6 h; one build takes ~40 h). A newer run cancels an older one.
+name: build
+run-name: build ${{ inputs.version || 'stable' }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Chromium version (empty = current stable for Windows)
+        required: false
+concurrency: {group: build, cancel-in-progress: true}
+permissions: {contents: write, actions: read}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        run: |
+          v='${{ inputs.version }}'
+          if [ -z "$v" ]; then
+            v=$(curl -sf 'https://chromiumdash.appspot.com/fetch_releases?channel=Stable&platform=Windows&num=1' | jq -r '.[0].version')
+          fi
+          [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "bad version: $v"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+  stage-1:
+    needs: [version]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: true
+      finished: ${{ 'false' }}
+
+  stage-2:
+    needs: [version, stage-1]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-1.outputs.finished }}
+
+  stage-3:
+    needs: [version, stage-2]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-2.outputs.finished }}
+
+  stage-4:
+    needs: [version, stage-3]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-3.outputs.finished }}
+
+  stage-5:
+    needs: [version, stage-4]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-4.outputs.finished }}
+
+  stage-6:
+    needs: [version, stage-5]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-5.outputs.finished }}
+
+  stage-7:
+    needs: [version, stage-6]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-6.outputs.finished }}
+
+  stage-8:
+    needs: [version, stage-7]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-7.outputs.finished }}
+
+  stage-9:
+    needs: [version, stage-8]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-8.outputs.finished }}
+
+  stage-10:
+    needs: [version, stage-9]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-9.outputs.finished }}
+
+  stage-11:
+    needs: [version, stage-10]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-10.outputs.finished }}
+
+  stage-12:
+    needs: [version, stage-11]
+    uses: ./.github/workflows/stage.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      first: false
+      finished: ${{ needs.stage-11.outputs.finished }}
+
+  release:
+    needs: [version, stage-12]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the build finished
+        run: '[ "${{ needs.stage-12.outputs.finished }}" = "true" ] || { echo "not finished after 12 stages"; exit 1; }'
+      - uses: actions/download-artifact@v8
+        with: {name: tern-win-x64}
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ needs.version.outputs.version }}
+        run: |
+          sha256sum tern-$V-win-x64.zip > tern-$V-win-x64.zip.sha256
+          gh release create "v$V" tern-$V-win-x64.zip tern-$V-win-x64.zip.sha256 -R "$GITHUB_REPOSITORY" \
+            --title "Tern $V" --notes "Tern built from Chromium $V (stable). Unsigned."
+

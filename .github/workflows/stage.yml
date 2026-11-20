@@ -1,0 +1,88 @@
+# One build stage: unpack the previous stage's work tree, build until the time
+# budget is used, then hand the tree to the next stage (or upload the browser).
+name: stage
+on:
+  workflow_call:
+    inputs:
+      version: {type: string, required: true}
+      first: {type: boolean, default: false}
+      finished: {type: string, default: 'false'}
+    outputs:
+      finished:
+        value: ${{ jobs.stage.outputs.finished }}
+
+jobs:
+  stage:
+    runs-on: windows-2022  # windows-2025 has ~30 GiB free, too little
+    timeout-minutes: 355
+    outputs:
+      finished: ${{ steps.done.outputs.finished }}
+    env:
+      ROOT: D:\t
+    steps:
+      - name: Start clock
+        if: inputs.finished != 'true'
+        shell: pwsh
+        # Stop compiling 4 h 50 m after the job starts, leaving ~65 min to pack and upload.
+        run: echo "STOP_AT=$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() + 17400)" >> $env:GITHUB_ENV
+      - uses: actions/checkout@v7
+        if: inputs.finished != 'true'
+      - uses: actions/setup-python@v7
+        if: inputs.finished != 'true'
+        with: {python-version: '3.12'}
+      - name: Windows SDK 10.0.28000.0 (Chromium's build/vs_toolchain.py SDK_VERSION)
+        if: inputs.finished != 'true'
+        shell: pwsh
+        run: |
+          if (Test-Path 'C:\Program Files (x86)\Windows Kits\10\Include\10.0.28000.0') { exit 0 }
+          $i = "$env:TEMP\winsdksetup.exe"
+          Invoke-WebRequest -Uri 'https://download.microsoft.com/download/38ab8f6d-3676-4860-ae84-3361308b9d7f/KIT_BUNDLE_WINDOWSSDK_MEDIACREATION/winsdksetup.exe' -OutFile $i
+          $p = Start-Process -FilePath $i -ArgumentList '/features OptionId.DesktopCPPx64 OptionId.WindowsDesktopDebuggers OptionId.SigningTools /q /norestart /ceip off' -PassThru -Wait
+          if ($p.ExitCode -ne 0) { throw "winsdksetup.exe failed: $($p.ExitCode)" }
+      - name: Git settings for a Chromium checkout
+        if: inputs.finished != 'true'
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.filemode false
+          git config --global core.longpaths true
+      - name: Unpack previous stage
+        if: inputs.finished != 'true' && !inputs.first
+        uses: actions/download-artifact@v8
+        with: {name: worktree, path: 'D:\'}
+      - name: Extract
+        if: inputs.finished != 'true' && !inputs.first
+        shell: pwsh
+        run: |
+          7z x D:\worktree.zip -oD:\ -y | Select-Object -Last 3
+          Remove-Item D:\worktree.zip
+      - name: Build
+        id: build
+        if: inputs.finished != 'true'
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $false
+          python -I tern\build.py --root $env:ROOT --version ${{ inputs.version }} --stop-at $env:STOP_AT
+          echo "code=$LASTEXITCODE" >> $env:GITHUB_OUTPUT
+          if ($LASTEXITCODE -ne 0 -and $LASTEXITCODE -ne 124) { exit $LASTEXITCODE }
+          exit 0
+      - name: Pack work tree for the next stage
+        if: steps.build.outputs.code == '124'
+        shell: pwsh
+        run: |
+          Get-PSDrive D | Select-Object Used,Free
+          7z a -tzip D:\worktree.zip $env:ROOT -mx=1 -mtc=on | Select-Object -Last 3
+      - name: Upload work tree
+        if: steps.build.outputs.code == '124'
+        uses: actions/upload-artifact@v7
+        with: {name: worktree, path: 'D:\worktree.zip', retention-days: 2, compression-level: 0, overwrite: true}
+      - name: Upload browser
+        if: steps.build.outputs.code == '0'
+        uses: actions/upload-artifact@v7
+        with: {name: tern-win-x64, path: 'D:\t\tern-*-win-x64.zip', retention-days: 7, compression-level: 0}
+      - name: Result
+        id: done
+        shell: pwsh
+        run: |
+          $f = if ('${{ inputs.finished }}' -eq 'true' -or '${{ steps.build.outputs.code }}' -eq '0') { 'true' } else { 'false' }
+          echo "finished=$f" >> $env:GITHUB_OUTPUT
+          Get-PSDrive C,D | Select-Object Name,Used,Free

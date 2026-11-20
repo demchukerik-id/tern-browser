@@ -1,0 +1,16 @@
+# Tern release build (Windows x64). Kept close to Chromium's defaults on purpose.
+is_official_build = true
+is_debug = false
+is_component_build = false
+target_cpu = "x64"
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+# No patent-encumbered codecs (H.264/AAC); FFmpeg as a separate DLL for LGPL.
+proprietary_codecs = false
+ffmpeg_branding = "Chromium"
+is_component_ffmpeg = true
+# No DRM module and no Google keys: neither is licensed to us.
+enable_widevine = false
+use_official_google_api_keys = false
+enable_hangout_services_extension = false
