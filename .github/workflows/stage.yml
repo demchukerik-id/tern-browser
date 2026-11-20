@@ -70,7 +70,11 @@ jobs:
         shell: pwsh
         run: |
           Get-PSDrive D | Select-Object Used,Free
+          # 7z exit 1 = warnings only (about 50 dangling symlinks in node_modules/.bin and nearby/); 2+ = error.
           7z a -tzip D:\worktree.zip $env:ROOT -mx=1 -mtc=on | Select-Object -Last 3
+          if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }
+          Get-Item D:\worktree.zip | Select-Object Length
+          exit 0
       - name: Upload work tree
         if: steps.build.outputs.code == '124'
         uses: actions/upload-artifact@v7
